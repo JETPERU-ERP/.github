@@ -1,0 +1,216 @@
+# Guía de instalación y configuración recomendada para Odoo 16 Community Edition en Ubuntu 20.04 LTS
+
+## 🔧 Requisitos previos
+
+- Ubuntu Server 20.04.6 LTS actualizado
+- Acceso root o permisos sudo
+
+## 🧱 1. Instalación de dependencias básicas
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git python3-pip build-essential wget curl python3-dev python3-venv \
+  libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools node-less \
+  libjpeg-dev libpq-dev libffi-dev libtiff-dev libopenjp2-7-dev libxml2-dev libxls-dev \
+  zlib1g-dev liblcms2-dev libblas-dev libatlas-base-dev xfonts-75dpi xfonts-base \
+  libfreetype6-dev libwebp-dev libharfbuzz-dev libfribidi-dev libxcb1-dev
+```
+
+## 🐘 2. Instalación y configuración de PostgreSQL
+
+```bash
+sudo apt install postgresql -y
+sudo -u postgres createuser -s odoo
+```
+
+## 👤 3. Crear usuario del sistema y directorios
+
+```bash
+sudo adduser --system --home=/opt/odoo --group odoo
+sudo mkdir /opt/odoo/custom-addons
+sudo chown -R odoo:odoo /opt/odoo
+```
+
+## 🌐 4. Clonar código fuente de Odoo 16
+
+```bash
+sudo -u odoo git clone https://github.com/odoo/odoo.git /opt/odoo/odoo --depth 1 --branch 16.0
+```
+
+## 📦 5. Crear entorno virtual e instalar dependencias
+
+```bash
+sudo -u odoo python3 -m venv /opt/odoo/venv
+sudo -u odoo -H bash -c "source /opt/odoo/venv/bin/activate && pip install -r /opt/odoo/odoo/requirements.txt"
+```
+
+## ⚙️ 6. Crear archivo de configuración `odoo.conf`
+
+### 🔍 6.1 Verificar capacidades del servidor
+
+```bash
+nproc
+free -m
+```
+
+### 🧮 6.2 Fórmulas recomendadas
+
+- workers = núcleos * 2 + 1
+- limit_memory_soft = RAM total * 0.7
+- limit_memory_hard = RAM total * 0.8
+
+### 📝 6.3 Crear archivo `odoo.conf`
+
+```ini
+[options]
+db_host = False
+db_port = False
+db_user = odoo
+db_password = False
+addons_path = /opt/odoo/odoo/addons,/opt/odoo/custom-addons
+admin_passwd = cambia_esto
+proxy_mode = True
+enable_uds = True
+logfile = /var/log/odoo/odoo.log
+logrotate = True
+xmlrpc_port = 8069
+longpolling_port = 8072
+workers = 17
+limit_request = 8192
+limit_memory_soft = 12079595520
+limit_memory_hard = 13743895347
+limit_time_cpu = 60
+limit_time_real = 120
+```
+
+## 📂 7. Crear carpeta de logs
+
+```bash
+sudo mkdir /var/log/odoo
+sudo chown odoo:odoo /var/log/odoo
+```
+
+## 🚀 8. Crear servicio systemd
+
+```ini
+[Unit]
+Description=Odoo
+Requires=postgresql.service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+SyslogIdentifier=odoo
+PermissionsStartOnly=true
+User=odoo
+Group=odoo
+ExecStart=/opt/odoo/venv/bin/python3 /opt/odoo/odoo/odoo-bin -c /opt/odoo/odoo.conf
+Restart=always
+RestartSec=5s
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable --now odoo.service
+```
+
+## 🔐 0. Certificados SSL (previo a configuración de Nginx)
+
+### 🛰️ 0.1 Migrar certificados desde servidor anterior
+
+**En el servidor dañado:**
+
+```bash
+mkdir -p /tmp/ssl_backup
+cp /etc/ssl/remesas/remesasjetperu_pe.crt /tmp/ssl_backup/
+cp /etc/ssl/remesas/remesasjetperu_pe.key /tmp/ssl_backup/
+tar czvf /tmp/certificados_remesas_backup.tar.gz -C /tmp ssl_backup
+```
+
+**Desde tu PC local:**
+
+```bash
+scp usuario@ip_servidor_dañado:/tmp/certificados_remesas_backup.tar.gz ~/
+scp ~/certificados_remesas_backup.tar.gz usuario@ip_nuevo_servidor:/tmp/
+```
+
+**En el nuevo servidor:**
+
+```bash
+tar xzvf /tmp/certificados_remesas_backup.tar.gz -C /tmp
+sudo mkdir -p /etc/ssl/remesas
+sudo mv /tmp/ssl_backup/remesasjetperu_pe.* /etc/ssl/remesas/
+sudo chown root:root /etc/ssl/remesas/remesasjetperu_pe.*
+sudo chmod 600 /etc/ssl/remesas/remesasjetperu_pe.key
+sudo chmod 644 /etc/ssl/remesas/remesasjetperu_pe.crt
+rm -rf /tmp/ssl_backup /tmp/certificados_remesas_backup.tar.gz
+```
+
+### 💾 0.2 Copia de seguridad desde el nuevo servidor
+
+```bash
+sudo tar czvf /tmp/certificados_remesas_backup.tar.gz -C /etc/ssl remesas/
+scp usuario@ip_nuevo_servidor:/tmp/certificados_remesas_backup.tar.gz ~/
+sudo rm /tmp/certificados_remesas_backup.tar.gz
+```
+
+## 🌍 9. Configuración de Nginx
+
+(Contenido omitido aquí por brevedad, se usa configuración funcional validada)
+
+## 🔁 10. Script para actualizar addons
+
+```bash
+sudo nano /opt/odoo/update_repos.sh
+```
+
+```bash
+#!/bin/bash
+ADDONS_DIR=/opt/odoo/custom-addons
+cd "$ADDONS_DIR"
+for d in */ ; do
+  echo "🔁 Actualizando $d"
+  cd "$d"
+  git pull --rebase
+  cd ..
+done
+```
+
+```bash
+sudo chmod +x /opt/odoo/update_repos.sh
+```
+
+## 🕘 11. Reinicio automático de Odoo con `cron`
+
+```bash
+sudo nano /opt/odoo/restart_odoo.sh
+```
+
+```bash
+#!/bin/bash
+echo "[$(date)] Reiniciando Odoo..." >> /var/log/odoo/restart.log
+systemctl restart odoo
+```
+
+```bash
+sudo chmod +x /opt/odoo/restart_odoo.sh
+sudo crontab -e
+```
+
+Agregar:
+
+```cron
+0 3 */3 * * /opt/odoo/restart_odoo.sh
+```
+
+## ✍️ Autor
+
+**Carlos Enrique Paico Zavala**  
+📞 961824616  
+📧 EnriqueZav96@gmail.com  
+💻 GitHub: [EnriqueZav96](https://github.com/EnriqueZav96)
